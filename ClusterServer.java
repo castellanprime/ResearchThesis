@@ -44,7 +44,6 @@ class workertask implements Runnable {
 	      		Thread.currentThread().interrupt();
 	      	}
 	    }
-	    socket.close();
 	}
 }
 
@@ -79,24 +78,32 @@ public class ClusterServer{
 		Thread threa = new Thread(worker);
 		threa.start();	
 
-		while (!Thread.currentThread().isInterrupted()){
+		try{
+			while (!Thread.currentThread().isInterrupted()){
 
-			byte [] inputrecv = workersocket.recv(0);
-			heartbeatReplier.send(inputrecv, 0);
+				byte [] inputrecv = workersocket.recv(0);
+				// Another problem
+				heartbeatReplier.send(inputrecv, 0);
 
-			if ("QUIT".equalsIgnoreCase(subscriber.recvStr(0))){
-				threa.interrupt();
-				//Problem is here
-				heartbeatReplier.send(" I am going to sleep".getBytes(), 0);
+				if ("QUIT".equalsIgnoreCase(subscriber.recvStr(0))){
+					threa.interrupt();
+					//Problem is here
+					heartbeatReplier.send(" I am going to sleep".getBytes(), 0);
 
-				byte [] reply = heartbeatReplier.recv(0);
-				String serverResponse = new String(reply);
-				System.out.println("Reply from server for initial hello: " + serverResponse);
-				if ("GoodBye".equalsIgnoreCase(serverResponse)){
-					Thread.currentThread().interrupt();
+					byte [] reply = heartbeatReplier.recv(0);
+					String serverResponse = new String(reply);
+					System.out.println("Reply from server for initial hello: " + serverResponse);
+					if ("GoodBye".equalsIgnoreCase(serverResponse)){
+						Thread.currentThread().interrupt();
+					}
 				}
 			}
-		}
+		} catch(Exception e) {
+            StringWriter sw = new StringWriter();
+            PrintWriter pw = new PrintWriter(sw);
+            e.printStackTrace(pw);
+            System.out.println(sw.toString());
+        }
 				
 		workersocket.close();
         heartbeatReplier.close();

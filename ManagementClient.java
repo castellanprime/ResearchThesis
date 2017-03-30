@@ -24,15 +24,20 @@ class inputreader implements Runnable{
 	@Override
 	public void run(){
 		while(true){
-			System.out.println("Enter your commands(START | s, QUIT | q): ");
-			if (userinput.hasNext()){
-				String input = userinput.next();
-				socket.send(input.getBytes(), 0);
-				if ("q".equalsIgnoreCase(input) || "QUIT".equalsIgnoreCase(input)){
-					socket.close();
-					break;
+			try{
+				System.out.println("Enter your commands(START | s, QUIT | q): ");
+				if (userinput.hasNext()){
+					String input = userinput.next();
+					socket.send(input.getBytes(), 0);
+					if ("q".equalsIgnoreCase(input) || "QUIT".equalsIgnoreCase(input)){
+						socket.close();
+						break;
+					}
 				}
-			}	
+				Thread.sleep(1000);
+			} catch(InterruptedException ie){
+				ie.printStackTrace();
+			}
 		}
 	}
 
@@ -105,71 +110,77 @@ public class ManagementClient{
 		Thread thre = new Thread(inputservice);
 		thre.start();
 
-			
-		while (!thre.isInterrupted()){
+		try{	
+			while (!thre.isInterrupted()){
 
-			// Poll for input from input thread
+				// Poll for input from input thread
 
-			byte [] inputread = inputsocket.recv(0);
-			String userinput = new String(inputread);
+				byte [] inputread = inputsocket.recv(0);
+				String userinput = new String(inputread);
 
-			// The start command
-			if (("START".equalsIgnoreCase(userinput) || "s".equalsIgnoreCase(userinput)) && CLUSTER_STARTS == 0){
-				++CLUSTER_STARTS;
+				// The start command
+				if (("START".equalsIgnoreCase(userinput) || "s".equalsIgnoreCase(userinput)) && CLUSTER_STARTS == 0){
+					++CLUSTER_STARTS;
 
-				// Setup heartbeat service
-				heartbeatworker service = new heartbeatworker(context, "tcp://127.0.0.1:5800", "Hello");
+					// Setup heartbeat service
+					heartbeatworker service = new heartbeatworker(context, "tcp://127.0.0.1:5800", "Hello");
 
-				// Start heartbeat service	
-				Thread thr1 = new Thread(service);
-				thr1.start();
+					// Start heartbeat service	
+					Thread thr1 = new Thread(service);
+					thr1.start();
 
-				while (subscribers < SUBSCRIBERS_REQUIRED){
+					while (subscribers < SUBSCRIBERS_REQUIRED){
 
-					byte[] reply = synchronizer.recv(0);
-					System.out.println("Subscriber " + subscribers + "  has replied: Reponse :" + new String(reply));
+						byte[] reply = synchronizer.recv(0);
+						System.out.println("Subscriber " + subscribers + "  has replied: Reponse :" + new String(reply));
 
-					synchronizer.send("I have seen you".getBytes(),0);
-					subscribers++;
-				}
+						synchronizer.send("I have seen you".getBytes(),0);
+						subscribers++;
+					}
 
-				// First initialization part
-				if(subscribers == SUBSCRIBERS_REQUIRED){
-					service.stopService();
-				}
+					// First initialization part
+					if(subscribers == SUBSCRIBERS_REQUIRED){
+						service.stopService();
+					}
 
-			} else if ("QUIT".equalsIgnoreCase(userinput) || "q".equalsIgnoreCase(userinput)){
+				} else if ("QUIT".equalsIgnoreCase(userinput) || "q".equalsIgnoreCase(userinput)){
 
-				// Setup heartbeat service
-				heartbeatworker service = new heartbeatworker(context, "tcp://127.0.0.1:5800", userinput);
+					// Setup heartbeat service
+					heartbeatworker service = new heartbeatworker(context, "tcp://127.0.0.1:5800", userinput);
 
-				// Start heartbeat service	
-				Thread thr2 = new Thread(service);
-				thr2.start();
+					// Start heartbeat service	
+					Thread thr2 = new Thread(service);
+					thr2.start();
 
-				// Tell subscribers to go to sleep.
-				while (subscribers > 0){
+					// Tell subscribers to go to sleep.
+					while (subscribers > 0){
 
+						byte [] reply = synchronizer.recv(0);
+
+						System.out.println("Subscriber " + subscribers + "  has indicated sleep: Reponse :" + new String(reply));
+
+						synchronizer.send("GoodBye");
+						subscribers--;
+					}
+
+					if (subscribers == 0){
+						service.stopService();
+						thre.interrupt();
+					}
+
+				} else if (("START".equalsIgnoreCase(userinput) || "s".equalsIgnoreCase(userinput)) && CLUSTER_STARTS > 0){ 
+					System.out.println("Cluster already started.");
+				} else {
 					byte [] reply = synchronizer.recv(0);
-
-					System.out.println("Subscriber " + subscribers + "  has indicated sleep: Reponse :" + new String(reply));
-
-					synchronizer.send("GoodBye");
-					subscribers--;
+					System.out.println("Got a new message: " + new String(reply));
 				}
-
-				if (subscribers == 0){
-					service.stopService();
-					thre.interrupt();
-				}
-
-			} else if (("START".equalsIgnoreCase(userinput) || "s".equalsIgnoreCase(userinput)) && CLUSTER_STARTS > 0){ 
-				System.out.println("Cluster already started.");
-			} else {
-				byte [] reply = synchronizer.recv(0);
-				System.out.println("Got a new message: " + new String(reply));
 			}
-		}			
+		} catch(Exception e) {
+            StringWriter sw = new StringWriter();
+            PrintWriter pw = new PrintWriter(sw);
+            e.printStackTrace(pw);
+            System.out.println(sw.toString());
+        }			
 		
 		// Close ports
 		inputsocket.close();
