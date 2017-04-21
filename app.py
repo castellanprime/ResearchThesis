@@ -30,8 +30,12 @@ def complie(st1, st2, intargs):
 	run(st2, inargs)
 
 if __name__=='__main__':
-	compli, runn, inargs = check_args(sys.argv[1:])
-	if compli:
-		complie(compli, runn, inargs)
-	else:
-		run(runn, inargs)
+	try:
+		compli, runn, inargs = check_args(sys.argv[1:])
+		if compli:
+			complie(compli, runn, inargs)
+		else:
+			run(runn, inargs)
+	except (SystemExit, KeyboardInterrupt):
+		print("Closing cluster..")
+
