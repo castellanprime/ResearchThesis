@@ -1,3 +1,19 @@
+/**
+ *  Copyright 2017 Okusanya Oluwadamilola
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+
+
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.concurrent.*;
@@ -12,7 +28,7 @@ import org.zeromq.ZMQ;
  * 
  */
 
-// To use the ROUTER socket, you have to use an id
+// To use the dealer socket, you have to use an id
 
 class Ping {
 	private int count = 0;
@@ -56,10 +72,14 @@ class PingWorker implements Runnable{
 	}
 }
 
+
 public class ClusterNode{
-	public static void main(String []  args){
+	public static void main(String [] args){
 
 		ZMQ.Context context = ZMQ.context(1);
+
+		Random rand = new Random();
+		int clientId = rand.nextInt(10) + 1;
 
 		BlockingQueue<String> storedCounts =  new LinkedBlockingQueue<>();
 
@@ -67,75 +87,121 @@ public class ClusterNode{
 		ZMQ.Socket pingWorkerSocket = context.socket(ZMQ.PAIR);
 		pingWorkerSocket.bind("inproc://pingWorker");
 
-		// Setup router socket
-		ZMQ.Socket routerSocket = context.socket(ZMQ.ROUTER);
-		routerSocket.bind("tcp://127.0.0.1:5050");
+		// Setup dealer socket
+		ZMQ.Socket dealerSocket = context.socket(ZMQ.DEALER);
+		String identity = "Client-" + clientId;
+		dealerSocket.setIdentity(identity.getBytes());
+		dealerSocket.connect("tcp://127.0.0.1:5050");	
+
+
+		// Setup subscriber socker
+		ZMQ.Socket subscriberSocket = context.socket(ZMQ.SUB);
+		subscriberSocket.connect("tcp://127.0.0.1:5300");
+		subscriberSocket.subscribe("".getBytes());
+
+		// Setup heartbeatreplier socket
+		ZMQ.Socket stopNodeSocket = context.socket(ZMQ.REQ);
+		stopNodeSocket.connect("tcp://127.0.0.1:5900");
 
 		// Initialise the pollin set
-		ZMQ.Poller routerTestPoller = new ZMQ.Poller(1);
-		routerTestPoller.register(pingWorkerSocket, ZMQ.Poller.POLLIN);		// POLLIN/POLLOUT only listen for incoming/outgoing messages 
-		routerTestPoller.register(routerSocket, ZMQ.Poller.POLLIN);
-
+		ZMQ.Poller dealerTestPoller = new ZMQ.Poller(3);
+		dealerTestPoller.register(pingWorkerSocket, ZMQ.Poller.POLLIN);		// POLLIN/POLLOUT only listen for incoming/outgoing messages 
+		dealerTestPoller.register(subscriberSocket, ZMQ.Poller.POLLIN);
+		dealerTestPoller.register(dealerSocket, ZMQ.Poller.POLLIN);	
+		
 		// Setup pair with pingWorkerSocket
 		PingWorker worker = new PingWorker(context, "inproc://pingWorker");
 		Thread pings = new Thread(worker);
-		//pings.start();
 		
 		int numberToSend = 0;
 		String id = "";
-		boolean isClusterRunning = false;
+		boolean isNodeUp = false;
+		boolean stopPingThread = false;
 
 		// Main loop
 		try{
 			while (!Thread.currentThread().isInterrupted()){
 				String message;
-				routerTestPoller.poll();
+				dealerTestPoller.poll();
 
-				// if pingWorker has received a message from 
-				if (routerTestPoller.pollin(0)){
+				// Messages from counter
+				if (dealerTestPoller.pollin(0)){
 					message = new String(pingWorkerSocket.recv(0));
 					System.out.println("Received message = " + message);
 					storedCounts.offer(message);
 				}
-
-				if (storedCounts.size() == 100){
-					ArrayList<String> listtoSend = new ArrayList<>();
-							// drain the queue to the listtoSend
-					numberToSend = storedCounts.size() - 2;
-					storedCounts.drainTo(listtoSend, numberToSend);	
-					for (String item: listtoSend){
-						routerSocket.send(id.getBytes(), ZMQ.SNDMORE);
-						routerSocket.send(item.getBytes(), 0);
-						System.out.println("Sending " + item + " to dealer");
-						numberToSend--;
+			
+				// Responding to heartbeats
+				if (dealerTestPoller.pollin(1)){
+					message = new String(subscriberSocket.recv(0));
+					System.out.println("[Heartbeats[: Received (" + message + ")");
+					stopNodeSocket.send("I am here".getBytes(), 0);
+					System.out.println("[Heartbeats[: Just sent( I am here)");
+					message = new String(stopNodeSocket.recv(0));
+					System.out.println("[Heartbeats[: Received (" + message + ")");
+					if ("I have seen you".equalsIgnoreCase(message) && isNodeUp == false){
+						dealerSocket.send("I am ready".getBytes(), 0);
+						System.out.println("[Heartbeats]: Just sent(I am ready)");
+						isNodeUp = true;
 					}
 				}
 
-				if (routerTestPoller.pollin(1)){
-					id = new String(routerSocket.recv(0));  
-					message = new String(routerSocket.recv(0));
-					if ("QUIT".equalsIgnoreCase(message)){
-						if (numberToSend == 0){
-							worker.stopWorker();
-							routerSocket.send(id, ZMQ.SNDMORE);
-							routerSocket.send("GOODBYE".getBytes(), 0);
-							Thread.currentThread().interrupt();
-						} else {
-							System.out.println("System is still sending " + numberToSend + " messages");
-						}
-					}
-
-					if ("START".equalsIgnoreCase(message) && isClusterRunning == false){
-						routerSocket.send(id, ZMQ.SNDMORE);
-						if (isClusterRunning == false){
-							routerSocket.send("Starting counter".getBytes(), 0);
+				// Responding to commands from server
+				if (dealerTestPoller.pollin(2)){
+					//id = new String(dealerSocket.recv(0));
+					message = new String(dealerSocket.recv(0));
+					String [] messageParts = message.split("\\s");
+					if ("START".equalsIgnoreCase(messageParts[0])){
+						if (isNodeUp== true){
+							dealerSocket.send("Starting counter".getBytes(), 0);
+							System.out.println("[Setup]: Starting counter");
 							pings.start();
-							isClusterRunning = true;	
-						}else {
-							routerSocket.send("Cluster has already started".getBytes(), 0);
+						} else {
+							dealerSocket.send("[Error]: Cluster has already started".getBytes(), 0);
+						}
+					}
+
+					if ("QUIT".equalsIgnoreCase(messageParts[0])){
+						if (numberToSend == 0){
+							stopPingThread = true;
+						} else {
+							System.out.println("[Error]: System is still sending " + numberToSend + " messages");
+						}
+					}
+
+
+					if ("QUERY".equalsIgnoreCase(messageParts[0])){
+						numberToSend = Integer.parseInt(messageParts[1]);
+						if (numberToSend > storedCounts.size() - 2 || numberToSend <= 0){
+							String error = "Illegal number of messages to retrieve";
+							if (numberToSend <= 0){
+								error = error + "Try a larger number than" + numberToSend; 
+							} else {
+								error = error + "Try a smaller number than" + numberToSend;
+							}
+							dealerSocket.send(error.getBytes(), 0);
+						} else {
+							ArrayList<String> listtoSend = new ArrayList<>();
+							storedCounts.drainTo(listtoSend, numberToSend);	
+							for (String item: listtoSend){
+								dealerSocket.send(item.getBytes(), 0);
+								System.out.println("Sending " + item + " to dealer");
+								numberToSend--;
+							}
 						}
 					}
 				}
+
+				if (stopPingThread == true){
+					stopNodeSocket.send("Shutting down!!!".getBytes(), 0);
+					message = new String(stopNodeSocket.recv(0));
+					System.out.println("[Heartbeats]: Received (" + message + ")");
+					if ("GOODBYE".equalsIgnoreCase(message)){
+						worker.stopWorker();
+						Thread.currentThread().interrupt();
+					}
+				}
+
 			}
 		} catch(Exception e) {
             StringWriter sw = new StringWriter();
@@ -144,8 +210,9 @@ public class ClusterNode{
             System.out.println(sw.toString());
         }
 
+        stopNodeSocket.close();
         pingWorkerSocket.close();
-        routerSocket.close();
+        dealerSocket.close();
         context.term();
 	}
 }
