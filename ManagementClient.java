@@ -13,6 +13,11 @@
  *  limitations under the License.
  */
 
+
+/**
+ *  This manages the cluster.
+ */
+
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Random;
@@ -20,43 +25,6 @@ import java.util.ArrayList;
 import java.util.Scanner;
 import java.util.HashMap;
 import org.zeromq.ZMQ;
-
-/*
-class UserInputReader implements Runnable{
-	private volatile boolean stopped;
-	private Scanner readIn = new Scanner(System.in);
-	public ZMQ.Socket socket;
-
-	public UserInputReader(ZMQ.Context context, String address){
-		this.socket = context.socket(ZMQ.PAIR);
-		socket.connect(address);
-	}
-
-	@Override
-	public void run(){
-		while(!stopped){
-			try{
-				System.out.println("Enter your commands(START, QUERY [nodenum] [number of messages], QUIT): ");
-				String command = readIn.nextLine();
-				if (!command.isEmpty()){
-					socket.send(command.getBytes(), 0);
-				}
-				Thread.sleep(9000);
-			} catch (InterruptedException ie){
-				ie.printStackTrace();
-			}
-		}
-
-		if (stopped == true){
-			socket.close();
-		}
-	}
-
-	public void stopReader(){
-		stopped = true;
-	}
-}
-*/
 
 class HeartbeatWorker implements Runnable{
 	private volatile boolean stopped;
@@ -101,7 +69,12 @@ class HeartbeatWorker implements Runnable{
 public class ManagementClient{
 	public static void main(String [] args){
 
-		int SUBSCRIBERS_REQUIRED = 0, subscribers = 0;
+		// Variables, flags
+		int SUBSCRIBERS_REQUIRED = 0, subscribers = 0, numberToSend = 0;
+		String clusterNodeId = "";
+		boolean isClusterStarted = false, isClusterRunning = false, isContinueSet = false;
+
+		HashMap<String, String> nodeIdentites = new HashMap<String, String>();
 
 		// Check for input
 		if (args.length != 1){
@@ -118,49 +91,43 @@ public class ManagementClient{
 		
 		ZMQ.Context context = ZMQ.context(1);
 
-		// Setup pair socket 
+		// Setup pair socket with the userinput thread
 		ZMQ.Socket userInputSocket = context.socket(ZMQ.REP);
 		userInputSocket.bind("tcp://127.0.0.1:6000");
 	
-		// Setup router socket
+		// Setup socket for heartbeats messages
+		ZMQ.Socket synchSocket = context.socket(ZMQ.REP);
+		synchSocket.bind("tcp://127.0.0.1:5900");
+
+		// Setup router socket for synchronization messages, 
 		ZMQ.Socket routerSocket = context.socket(ZMQ.ROUTER);
 		routerSocket.bind("tcp://127.0.0.1:5050");
-
-		// Setup heartbeatReplier socket
-		ZMQ.Socket shutDownNodeSocket = context.socket(ZMQ.REP);
-		shutDownNodeSocket.bind("tcp://127.0.0.1:5900");
-
-
-		// Initialise the pollin set
-		ZMQ.Poller routerTestPoller = new ZMQ.Poller(3);
-		routerTestPoller.register(userInputSocket, ZMQ.Poller.POLLIN);		// POLLIN/POLLOUT only listen for incoming/outgoing messages 
-		routerTestPoller.register(shutDownNodeSocket, ZMQ.Poller.POLLIN);
-		routerTestPoller.register(routerSocket, ZMQ.Poller.POLLIN);
+		//routerSocket.bind("tcp://127.0.0.1:5100");		// This fucks it if you bind more than one endpoint
+	
+		// Setup socket for shutdown messages
+		ZMQ.Socket shutdownClusterSocket = context.socket(ZMQ.REP);
+		shutdownClusterSocket.bind("tcp://127.0.0.1:5100");
 		
-		// Setup pair with UserInputReader Socket
-		//UserInputReader reader = new UserInputReader(context, "inproc://userinput");
-		//Thread commands = new Thread(reader);
-		//commands.start();
-
-		int numberToSend = 0;
-		String id = "";
-
-		HashMap<String, String> nodeIdentites = new HashMap<String, String>();
+		// Initialise the pollin set
+		ZMQ.Poller managementThreadPoller = new ZMQ.Poller(3);
+		managementThreadPoller.register(userInputSocket, ZMQ.Poller.POLLIN);		// POLLIN/POLLOUT only listen for incoming/outgoing messages 
+		managementThreadPoller.register(synchSocket, ZMQ.Poller.POLLIN);
+		managementThreadPoller.register(routerSocket, ZMQ.Poller.POLLIN);
+		managementThreadPoller.register(shutdownClusterSocket, ZMQ.Poller.POLLIN);
 
 		// Initialize heartbeatworker
 		HeartbeatWorker worker = new HeartbeatWorker(context, "tcp://127.0.0.1:5300");
 		Thread heartbeats = new Thread(worker);
 
-		boolean isClusterStarted = false, isClusterRunning = false, isContinueSet = false;
 
 		// Main loop
 		try{
 			while (!Thread.currentThread().isInterrupted()){
 				String message;
-				routerTestPoller.poll();
+				managementThreadPoller.poll();
 
 				// Sending user commands
-				if (routerTestPoller.pollin(0)){
+				if (managementThreadPoller.pollin(0)){
 					message = new String(userInputSocket.recv(0));
 					String [] messageParts = message.split("\\s");
 					StringBuilder st = new StringBuilder();
@@ -173,17 +140,21 @@ public class ManagementClient{
 							routerSocket.send(message.getBytes(), 0);
 						}
 					} else if ("QUERY".equalsIgnoreCase(messageParts[0])){
-						String nodeId = nodeIdentites.get(messageParts[1]);
-						routerSocket.send(nodeId, ZMQ.SNDMORE);
-						message = messageParts[0] + " " + messageParts[2];
-						routerSocket.send(message.getBytes(), 0);
+						if (nodeIdentites.containsKey(messageParts[1]) == true){
+							String nodeId = nodeIdentites.get(messageParts[1]);
+							routerSocket.send(nodeId, ZMQ.SNDMORE);
+							message = messageParts[0] + " " + messageParts[2];
+							routerSocket.send(message.getBytes(), 0);
+						}else {
+							message = "Node number is not correct";
+						}
 					} else if ("CONTINUE".equalsIgnoreCase(messageParts[0])){
 						isContinueSet = true;
 					} else {
 						System.out.println("This command is not recognised!!!");
 					}
 
-					if ( isContinueSet == true){
+					if (isContinueSet == true){
 						st.append("[Input]: The cluster identities : ( ");
 						for (String key : nodeIdentites.keySet()){
 							st.append(key);
@@ -198,26 +169,19 @@ public class ManagementClient{
 				}
 
 
-				// Synchronization sequence/ Shutdown sequence
-				if (routerTestPoller.pollin(1)){
-					message = new String(shutDownNodeSocket.recv(0));
+				// Synchroniation sequence
+				if (managementThreadPoller.pollin(1)){
+					message = new String(synchSocket.recv(0));
 					System.out.println("[Heartbeats]: Received (" + message + ")");
 					if ("I am here".equalsIgnoreCase(message)){
-						shutDownNodeSocket.send("I have seen you".getBytes(), 0);
+						synchSocket.send("I have seen you".getBytes(), 0);
 						System.out.println("[Heartbeats]: Just sent(I have seen you)");
-					}
-
-					if ("Shutting down!!!".equalsIgnoreCase(message)){ 
-						shutDownNodeSocket.send("GOODBYE".getBytes(), 0);
-						worker.stopHeartBeats();
-						//reader.stopReader();
-						Thread.currentThread().interrupt();
 					}
 				}
 
 				// Receiving and replying to heartbeats
-				if (routerTestPoller.pollin(2)){
-					id = new String(routerSocket.recv(0));
+				if (managementThreadPoller.pollin(2)){
+					clusterNodeId = new String(routerSocket.recv(0));
 					message = new String(routerSocket.recv(0));
 					System.out.println("Received: (" + message + ") from ClusterNode" + id);
 					if ("I am ready".equalsIgnoreCase(message)){
@@ -230,6 +194,7 @@ public class ManagementClient{
 							System.out.println("[Setup]: Added new subscriber");
 						}
 					}
+
 					if (subscribers == SUBSCRIBERS_REQUIRED && isClusterRunning == false){
 						for (String nodeId: nodeIdentites.values()){
 							routerSocket.send(nodeId, ZMQ.SNDMORE);
@@ -238,7 +203,25 @@ public class ManagementClient{
 						}
 						isClusterRunning = true;
 					} 
-				}				
+				}
+
+				// For the shutdown sequence
+				if (managementThreadPoller.pollin(3)){
+					message = new String(shutdownClusterSocket.recv(0));
+					shutdownClusterSocket.send("GOODBYE".getBytes(), 0);
+					System.out.println("[Shutdown]: Just sent (GOODBYE)");
+					subscribers--;
+					if (subscribers == 0){
+						worker.stopHeartBeats();
+						Thread.currentThread().interrupt();
+					}
+				}
+
+			}
+
+			// This closes the thread completely
+			if (Thread.currentThread().isInterrupted()){
+				return;
 			}
 		} catch (Exception e){
 			StringWriter sw = new StringWriter();
@@ -247,7 +230,8 @@ public class ManagementClient{
             System.out.println(sw.toString());
 		}
 
-		shutDownNodeSocket.close();
+		shutdownClusterSocket.close();
+		synchSocket.close();
 		userInputSocket.close();
 		routerSocket.close();
 		context.term();

@@ -93,15 +93,19 @@ public class ClusterNode{
 		dealerSocket.setIdentity(identity.getBytes());
 		dealerSocket.connect("tcp://127.0.0.1:5050");	
 
-
 		// Setup subscriber socker
 		ZMQ.Socket subscriberSocket = context.socket(ZMQ.SUB);
 		subscriberSocket.connect("tcp://127.0.0.1:5300");
 		subscriberSocket.subscribe("".getBytes());
 
-		// Setup heartbeatreplier socket
+		// Setup socket for heartbeats messages
+		ZMQ.Socket synchSocket = context.socket(ZMQ.REQ);
+		synchSocket.connect("tcp://127.0.0.1:5900");
+
+		// Setup socket for shutdown sequence
 		ZMQ.Socket stopNodeSocket = context.socket(ZMQ.REQ);
-		stopNodeSocket.connect("tcp://127.0.0.1:5900");
+		stopNodeSocket.setIdentity(identity.getBytes());
+		stopNodeSocket.connect("tcp://127.0.0.1:5100");		
 
 		// Initialise the pollin set
 		ZMQ.Poller dealerTestPoller = new ZMQ.Poller(3);
@@ -134,11 +138,11 @@ public class ClusterNode{
 				// Responding to heartbeats
 				if (dealerTestPoller.pollin(1)){
 					message = new String(subscriberSocket.recv(0));
-					System.out.println("[Heartbeats[: Received (" + message + ")");
-					stopNodeSocket.send("I am here".getBytes(), 0);
-					System.out.println("[Heartbeats[: Just sent( I am here)");
-					message = new String(stopNodeSocket.recv(0));
-					System.out.println("[Heartbeats[: Received (" + message + ")");
+					System.out.println("[Heartbeats]: Received (" + message + ")");
+					synchSocket.send("I am here".getBytes(), 0);
+					System.out.println("[Heartbeats]: Just sent( I am here)");
+					message = new String(synchSocket.recv(0));
+					System.out.println("[Heartbeats]: Received (" + message + ")");
 					if ("I have seen you".equalsIgnoreCase(message) && isNodeUp == false){
 						dealerSocket.send("I am ready".getBytes(), 0);
 						System.out.println("[Heartbeats]: Just sent(I am ready)");
@@ -195,13 +199,17 @@ public class ClusterNode{
 				if (stopPingThread == true){
 					stopNodeSocket.send("Shutting down!!!".getBytes(), 0);
 					message = new String(stopNodeSocket.recv(0));
-					System.out.println("[Heartbeats]: Received (" + message + ")");
+					System.out.println("[Shutdown]: Received (" + message + ")");
 					if ("GOODBYE".equalsIgnoreCase(message)){
 						worker.stopWorker();
 						Thread.currentThread().interrupt();
 					}
 				}
+			}
 
+			// This closes the thread completely
+			if (Thread.currentThread().isInterrupted()){
+				return;
 			}
 		} catch(Exception e) {
             StringWriter sw = new StringWriter();
@@ -210,7 +218,7 @@ public class ClusterNode{
             System.out.println(sw.toString());
         }
 
-        stopNodeSocket.close();
+        synchSocket.close();
         pingWorkerSocket.close();
         dealerSocket.close();
         context.term();

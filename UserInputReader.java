@@ -14,6 +14,18 @@
  */
 
 
+/**
+ *  This reads user input in the form of commands and sends it to the entire cluster
+ *  or a particular node in the cluster
+ *  -	START : 									Starts the cluster
+ *  -	QUERY [nodenum] [numberofdebugmessages]: 	Retrieves a certain amount of debug 
+ *  												messages from a node in cluster
+ *  -	STOP [nodenum]:								Stop a particular node
+ *  -	RESTART [nodenum]:							Restart a particular node
+ *  - 	QUIT :										Shutdown the entire cluster
+ */
+
+
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Scanner;
@@ -30,7 +42,8 @@ public class UserInputReader{
 		try{
 			while(!Thread.currentThread().isInterrupted()){
 				try{
-					System.out.println("Enter your commands(START, QUERY [nodenum] [number of messages], QUIT): ");
+					System.out.println("Enter your commands(START, QUERY [nodenum] [number of messages], " + 
+								"STOP [nodenum], RESTART [nodenum], QUIT): ");
 					String command = readIn.nextLine();
 					if (command.isEmpty()){
 						command = "CONTINUE";
@@ -42,7 +55,7 @@ public class UserInputReader{
 					if ("QUIT".equalsIgnoreCase(command)){
 						break;
 					}
-					Thread.sleep(9000);
+					Thread.sleep(9000);			// Arbitary sleep times
 				} catch (InterruptedException ie){
 					Thread.currentThread().interrupt();
 					ie.printStackTrace();
