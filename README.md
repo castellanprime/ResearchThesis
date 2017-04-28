@@ -4,10 +4,16 @@ This project aims to compare RAFT and CRDTs in the context of a distributed mess
 
 ### Tools
 1. Java
-2. Zeromq
+2. Zeromq. Installation instructions are [here](https://github.com/zeromq/jzmq)
 3. Possibly python for prototyping/initialization in the early phases 
 
 > Disclaimer: Use at your own risk
+
+### To run:
+
+> ./app.py -c {Class}.java {Class} [NumberofNodes]
+
+> ./app.py -r {Class} [NumberofNodes]
 
 ** This timeline is tentative**
 
